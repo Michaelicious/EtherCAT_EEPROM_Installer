@@ -4,8 +4,9 @@ Author:     Michael.grinberg@stxim.com
 
 UI for writting EtherCAT EEPROM .bin files.
 
-dependencies:
-1. Install NPCAP, (.exe file is provided, or go to npcap.com)
+Dependencies:
+Install NPCAP, (.exe file is provided, or go to npcap.com)
+NOTICE (!) While installing npcap, you need verify API Compatible mode is checked  I
 
 Changelog:
 V1.2:
