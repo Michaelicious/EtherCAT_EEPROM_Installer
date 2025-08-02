@@ -2,10 +2,10 @@ Software Information
 Verison:    V1.2
 Author:     Michael.grinberg@stxim.com
 
-Instructions:
+UI for writting EtherCAT EEPROM .bin files.
+
+dependencies:
 1. Install NPCAP, (.exe file is provided, or go to npcap.com)
-2. The Neccessary EEPROM File should be named ESCeepromdata.bin
-3. run ec_eeprom_setup.exe
 
 Changelog:
 V1.2:
