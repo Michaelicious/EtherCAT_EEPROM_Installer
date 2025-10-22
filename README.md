@@ -8,7 +8,7 @@ Author:     Michael.grinberg@stxim.com
 Dependencies:
 - Works only with .bin files, can be created in TwinCAT from .xml file.
 - Network Card must be real-time supporting (Usually intel chipsets), otherwise software will return writeSDO expections.
-- Install NPCAP (npcap.com) in API Compatible Mode (Checkmark during installation)
+- Install latest [NPCAP](https://npcap.com/#download) Packet Sniffer in API-Compatible Mode (Checkmark during installation) 
 
 
 Changelog:
