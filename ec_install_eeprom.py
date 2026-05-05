@@ -1,6 +1,5 @@
-import pysoem,time
+import pysoem, time
 from typing import Literal
-from PyQt6.QtCore import pyqtSignal, pyqtSlot
 from pysoem.pysoem import CdefSlave, Master
 
 
@@ -18,9 +17,7 @@ def read_eeprom_data(slave:CdefSlave, eeprom_size:int=1024)->bytearray:
     binr = bytearray()
     
     for i in range(0, eeprom_size, 2):
-        print('{:04x}:'.format(i), end='')
         read = slave.eeprom_read(i)
-        # print(f'{read}')
         for b in read:
             binr.append(b)
     return binr
@@ -36,8 +33,7 @@ def write_eeprom_data(slave:CdefSlave, bin_file:bytes):
             it = iter(bin_file) # Single iterable object to bind 2 bin_file objects
             for i, (b1, b2) in enumerate(zip(it, it)):
                 slave.eeprom_write(i, bytes([b1, b2])) # type: ignore
-                print(f'writing eeprom data {i}')
-            print(f'eeprom write finished')
+            print("eeprom write finished")
             return True
         except Exception as e: 
             print(f'eeprom write exception{e}\nRetrying ...')
@@ -87,7 +83,7 @@ def setup_ethercat()-> Master | Literal[False]:
 import os,sys
 
 BIN_FILE = 'ESCeepromdata.bin'
-VERSION = '1.2'
+VERSION = '1.3'
 
 if __name__ == "__main__":
     

@@ -1,7 +1,7 @@
 UI for writting EtherCAT EEPROM .bin files.
 
 
-Verison:    V1.2
+Verison:    V1.3
 
 Author:     Michael.grinberg@stxim.com
 
@@ -12,6 +12,9 @@ Dependencies:
 
 
 Changelog:
+V1.3:
+Updated UI
+Added option to read from drive
 
 V1.2:
 Added Human Readble translation of EEPROM binary contant

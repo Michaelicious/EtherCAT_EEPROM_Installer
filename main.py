@@ -2,177 +2,323 @@ import sys
 from time import sleep
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QTextEdit, QFileDialog, QMessageBox
+    QTextEdit, QFileDialog, QLabel
 )
 from PyQt6.QtCore import QThread, pyqtSignal
 
-# --- Import your existing functions here ---
 from ec_install_eeprom import (
     read_eeprom_bin_file,
+    read_eeprom_data,
     setup_ethercat,
-    # read_eeprom_data,
-    verify_eeprom_data,
-    write_eeprom_data
+    write_eeprom_data,
 )
 
-class EEPROMWorker(QThread):
-    log = pyqtSignal(str)
-    finished = pyqtSignal(bool)
+VERSION = "V1.2"
 
-    def __init__(self, bin_data):
-        super().__init__()
-        self.bin_data = bin_data
-        self.slave  = None  # set in setup_ethercat()
+_NO_SLAVE_HINT = (
+    "  • Verify the slave device is powered and connected.\n"
+    "  • Confirm NPCAP is installed in API-Compatible Mode.\n"
+    "  • Use a real-time capable network card (Intel recommended)."
+)
+
+
+def format_hex(data) -> str:
+    lines = []
+    for i in range(0, len(data), 16):
+        chunk = data[i:i + 16]
+        hex_str = f"{'  '.join(f'{b:02X}' for b in chunk):<47}"
+        ascii_str = "".join(chr(b) if 32 <= b <= 126 else "." for b in chunk)
+        lines.append(f"{i:08X}  {hex_str}  {ascii_str}")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Workers
+# ---------------------------------------------------------------------------
+
+class ReadWorker(QThread):
+    log = pyqtSignal(str)
+    data_ready = pyqtSignal(object)   # bytearray
+    finished = pyqtSignal(bool)
 
     def run(self):
         try:
-            self.log.emit("Setting up EtherCAT...")
-            self.master = setup_ethercat()
-            if not self.master:
-                self.log.emit("Failed to find EtherCAT slave. Is there a slave connected?")
+            self.log.emit("Connecting to EtherCAT network…")
+            master = setup_ethercat()
+            if not master:
+                self.log.emit(f"ERROR: No EtherCAT slave found.\n{_NO_SLAVE_HINT}")
                 self.finished.emit(False)
                 return
-            self.log.emit("Reading EEPROM data from slave...")
-            self.slave = self.master.slaves[-1]
-            # eeprom_read_from_slave = read_eeprom_data(self.slave, eeprom_size=1024)
-            # self.log.emit("EEPROM data read successfully from slave.")
-            self.log.emit("Verifying EEPROM data...")
-            if verify_eeprom_data(self.slave, self.bin_data):
-                self.log.emit("Verification successful. No need to write.")
+            slave = master.slaves[-1]
+            self.log.emit(f"Connected — {len(master.slaves)} slave(s) detected. Reading EEPROM…")
+            data = read_eeprom_data(slave, eeprom_size=1024)
+            self.log.emit(f"SUCCESS: Device EEPROM read complete ({len(data)} bytes).")
+            self.data_ready.emit(data)
+            self.finished.emit(True)
+        except Exception as e:
+            self.log.emit(f"ERROR: {e}")
+            self.finished.emit(False)
+
+
+class WriteWorker(QThread):
+    log = pyqtSignal(str)
+    device_data_ready = pyqtSignal(object)   # bytearray
+    finished = pyqtSignal(bool)
+
+    def __init__(self, bin_data: bytes):
+        super().__init__()
+        self.bin_data = bin_data
+
+    def run(self):
+        try:
+            self.log.emit("Connecting to EtherCAT network…")
+            master = setup_ethercat()
+            if not master:
+                self.log.emit(f"ERROR: No EtherCAT slave found.\n{_NO_SLAVE_HINT}")
+                self.finished.emit(False)
+                return
+
+            slave = master.slaves[-1]
+            self.log.emit(f"Connected — {len(master.slaves)} slave(s) detected.")
+
+            self.log.emit("Reading current device EEPROM for comparison…")
+            current = read_eeprom_data(slave, eeprom_size=len(self.bin_data))
+            self.device_data_ready.emit(current)
+
+            if bytes(current) == self.bin_data:
+                self.log.emit("SUCCESS: Device EEPROM already matches the BIN file — no write needed.")
                 self.finished.emit(True)
                 return
 
-            self.log.emit("EEPROM Data not up to date with BIN file. Writing EEPROM data...")
-            res = write_eeprom_data(self.slave, self.bin_data)
-            self.log.emit("Writing EEPROM data finished with result: {}".format(res))
-            sleep(0.5)  # Allow some time for the write operation to complete  
-            self.log.emit("Verifying EEPROM data After writing...")
-            if verify_eeprom_data(self.slave, self.bin_data):
-                self.log.emit("Verification successful.")
+            self.log.emit(f"Mismatch detected. Writing {len(self.bin_data)} bytes to device EEPROM…")
+            ok = write_eeprom_data(slave, self.bin_data)
+            if not ok:
+                self.log.emit(
+                    "ERROR: Write failed after 3 attempts.\n"
+                    "  • Check device connection and power.\n"
+                    "  • Reconnect and try again."
+                )
+                self.finished.emit(False)
+                return
+
+            self.log.emit("Write complete. Waiting for device to settle…")
+            sleep(0.5)
+            self.log.emit("Verifying written data…")
+            verified = read_eeprom_data(slave, eeprom_size=len(self.bin_data))
+            self.device_data_ready.emit(verified)
+
+            if bytes(verified) == self.bin_data:
+                self.log.emit("SUCCESS: EEPROM written and verified successfully.")
                 self.finished.emit(True)
             else:
-                self.log.emit("Verification failed after writing EEPROM. \nTry running again.")
+                self.log.emit(
+                    "FAILURE: Post-write verification failed — data on device does not match BIN file.\n"
+                    "  • Run the write operation again.\n"
+                    "  • If it continues to fail, check for write-protection on the device."
+                )
                 self.finished.emit(False)
         except Exception as e:
-            self.log.emit(f"Error: {e}")
+            self.log.emit(f"ERROR: {e}")
             self.finished.emit(False)
+
+# ---------------------------------------------------------------------------
+# UI
+# ---------------------------------------------------------------------------
 
 class EEPROMUI(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("STXi Motion EtherCAT EEPROM Tool V1.1")
-        self.resize(1000, 600)
-        
-        self.bin_data = b''
-        self.init_ui()
+        self.setWindowTitle(f"STXi Motion EtherCAT EEPROM Tool  {VERSION}")
+        self.resize(1300, 780)
+        self.bin_data = b""
+        self._apply_styles()
+        self._build_ui()
 
-    def init_ui(self):
-        layout = QVBoxLayout()
-        # color = "#5f1717ff"
+    # ------------------------------------------------------------------
+    def _apply_styles(self):
         self.setStyleSheet("""
-                           QPushButton {
-                            font-size: 16px;
-                            padding: 10px;
-                        }
-                        QPushButton:pressed {
-                            background-color: #ffffff;
-                        }
-                        QPushButton:disabled {
-                            background-color: gray;
-                            color: lightgray;
-                        }
-                        QPushButton:enabled {
-                            background-color: #bb5a5a;
-                            color: white;
-                        }
-                        QPushButton:enabled:hover {
-                            background-color: #5f1717ff;
-                            color: white;
-                        }
-                    """)
-        # File selection
-        file_layout = QHBoxLayout()
-        self.choose_button = QPushButton("Choose BIN File")
-        self.choose_button.clicked.connect(self.load_file)
-        self.start_button = QPushButton("Start")
-        self.start_button.setEnabled(False)
-        self.start_button.clicked.connect(self.start_process)
-        file_layout.addWidget(self.start_button)
-        file_layout.addWidget(self.choose_button)
-        layout.addLayout(file_layout)
+            QWidget {
+                background-color: #1a1a1a;
+                color: #dcdcdc;
+                font-family: Consolas, monospace;
+                font-size: 12px;
+            }
+            QPushButton {
+                font-size: 13px;
+                padding: 8px 20px;
+                border-radius: 3px;
+                min-width: 170px;
+            }
+            QPushButton:enabled {
+                background-color: #bb5a5a;
+                color: #fff;
+                border: none;
+            }
+            QPushButton:enabled:hover {
+                background-color: #943030;
+            }
+            QPushButton:pressed {
+                background-color: #ffffff;
+                color: #1a1a1a;
+            }
+            QPushButton:disabled {
+                background-color: #333;
+                color: #555;
+                border: 1px solid #3a3a3a;
+            }
+            QTextEdit {
+                background-color: #0f0f0f;
+                color: #c8c8c8;
+                border: 1px solid #2e2e2e;
+                font-family: Consolas, monospace;
+                font-size: 11px;
+            }
+            QLabel#section {
+                font-size: 11px;
+                font-weight: bold;
+                color: #bb5a5a;
+                letter-spacing: 2px;
+                padding: 3px 0px 1px 0px;
+            }
+            QLabel#filelabel {
+                font-size: 11px;
+                color: #666;
+                padding: 1px 0px;
+            }
+        """)
 
-        # Main display: messages + hex view
-        main_layout = QHBoxLayout()
+    def _build_ui(self):
+        root = QVBoxLayout()
+        root.setSpacing(6)
+        root.setContentsMargins(12, 12, 12, 12)
 
-        # Left: info messages
-        self.info_log = QTextEdit()
-        self.info_log.setReadOnly(True)
-        self.info_log.setPlaceholderText("Information messages...")
-        self.info_log.setMinimumSize(550, 600)
-        main_layout.addWidget(self.info_log, 1)
+        # ---- Buttons ----
+        btn_row = QHBoxLayout()
+        self.choose_btn = QPushButton("Choose BIN File")
+        self.choose_btn.clicked.connect(self._load_file)
 
-        # Right: hex view
-        self.hex_view = QTextEdit()
-        self.hex_view.setReadOnly(True)
-        self.hex_view.setPlaceholderText("Hex view of BIN file...")
-        self.hex_view.setMinimumSize(550, 600)
-        self.hex_view.setFixedWidth(550)
-        main_layout.addWidget(self.hex_view, 2)
+        self.read_btn = QPushButton("Read Device EEPROM")
+        self.read_btn.clicked.connect(self._start_read)
 
-        layout.addLayout(main_layout)
-        self.setLayout(layout)
+        self.write_btn = QPushButton("Write to Device")
+        self.write_btn.setEnabled(False)
+        self.write_btn.clicked.connect(self._start_write)
 
-    def load_file(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, "Select BIN file", "", "BIN Files (*.bin)")
-        self.display_hex(b'')
-        self.bin_data = b''
-        self.start_button.setEnabled(False)
-        QApplication.processEvents()  # Ensure UI updates before file loading
-        if file_path:
-            try:
-                self.bin_data = read_eeprom_bin_file(file_path)
-                if self.bin_data:
-                    self.display_hex(self.bin_data)
-                    self.log_message(f"File {file_path} loaded successfully. Size: {len(self.bin_data)} bytes.")
-                    self.start_button.setEnabled(True)
-                else:
-                    self.log_message("Selected file is empty.")
-            except Exception as e:
-                self.log_message(f"Failed to read file: {e}")
-        else:
-            self.log_message("No file selected.")
+        btn_row.addWidget(self.choose_btn)
+        btn_row.addWidget(self.read_btn)
+        btn_row.addWidget(self.write_btn)
+        btn_row.addStretch()
+        root.addLayout(btn_row)
 
-    def display_hex(self, data: bytes):
-        hex_lines = []
-        for i in range(0, len(data), 16):
-            chunk = data[i:i+16]
-            # Create hex representation
-            hex_str = ' '.join(f'{b:02X}' for b in chunk)
-            # Pad hex string with spaces to align ASCII representation
-            hex_str = f"{hex_str:<48}"
-            # Create ASCII representation
-            ascii_str = ''.join(chr(b) if 32 <= b <= 126 else '.' for b in chunk)
-            hex_lines.append(f"{i:08X}\t{hex_str}\t{ascii_str}")
-        self.hex_view.setPlainText('\n'.join(hex_lines))
+        # ---- Loaded file indicator ----
+        self.file_label = QLabel("No BIN file loaded.")
+        self.file_label.setObjectName("filelabel")
+        root.addWidget(self.file_label)
 
-    def log_message(self, msg):
-        self.info_log.append(msg)
-        print(msg)
+        # ---- Hex views ----
+        hex_row = QHBoxLayout()
+        hex_row.setSpacing(10)
 
-    def start_process(self):
-        self.info_log.clear()
-        self.start_button.setEnabled(False)
-        self.worker = EEPROMWorker(self.bin_data)
-        self.worker.log.connect(self.log_message)
-        self.worker.finished.connect(self.on_process_finished)
+        left = QVBoxLayout()
+        left.setSpacing(2)
+        lbl_bin = QLabel("BIN FILE")
+        lbl_bin.setObjectName("section")
+        self.bin_hex = QTextEdit()
+        self.bin_hex.setReadOnly(True)
+        self.bin_hex.setPlaceholderText("Load a BIN file to view its contents…")
+        left.addWidget(lbl_bin)
+        left.addWidget(self.bin_hex)
+
+        right = QVBoxLayout()
+        right.setSpacing(2)
+        lbl_dev = QLabel("DEVICE EEPROM")
+        lbl_dev.setObjectName("section")
+        self.dev_hex = QTextEdit()
+        self.dev_hex.setReadOnly(True)
+        self.dev_hex.setPlaceholderText(
+            "Use 'Read Device EEPROM' or 'Write to Device' to populate this view…"
+        )
+        right.addWidget(lbl_dev)
+        right.addWidget(self.dev_hex)
+
+        hex_row.addLayout(left)
+        hex_row.addLayout(right)
+        root.addLayout(hex_row, stretch=1)
+
+        # ---- Process log ----
+        lbl_log = QLabel("PROCESS LOG")
+        lbl_log.setObjectName("section")
+        self.log_box = QTextEdit()
+        self.log_box.setReadOnly(True)
+        self.log_box.setFixedHeight(160)
+        self.log_box.setPlaceholderText("Operation output will appear here…")
+        root.addWidget(lbl_log)
+        root.addWidget(self.log_box)
+
+        self.setLayout(root)
+
+    # ------------------------------------------------------------------
+    def _load_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Select BIN File", "", "BIN Files (*.bin)")
+        self.bin_hex.clear()
+        self.bin_data = b""
+        self.write_btn.setEnabled(False)
+        self.file_label.setText("No BIN file loaded.")
+        if not path:
+            return
+        try:
+            self.bin_data = read_eeprom_bin_file(path)
+            if self.bin_data:
+                self.bin_hex.setPlainText(format_hex(self.bin_data))
+                name = path.replace("\\", "/").split("/")[-1]
+                self.file_label.setText(f"Loaded: {name}  ({len(self.bin_data)} bytes)   {path}")
+                self.write_btn.setEnabled(True)
+            else:
+                self._log("ERROR: The selected file is empty.")
+        except Exception as e:
+            self._log(f"ERROR: Could not read file — {e}")
+
+    def _start_read(self):
+        self.dev_hex.clear()
+        self.log_box.clear()
+        self._set_buttons(False)
+        self.worker = ReadWorker()
+        self.worker.log.connect(self._log)
+        self.worker.data_ready.connect(lambda d: self.dev_hex.setPlainText(format_hex(d)))
+        self.worker.finished.connect(lambda _: self._set_buttons(True))
         self.worker.start()
 
-    def on_process_finished(self, success: bool):
-        if success:
-            QMessageBox.information(self, "EEPROM", "Process finished successfully.")
+    def _start_write(self):
+        self.dev_hex.clear()
+        self.log_box.clear()
+        self._set_buttons(False)
+        self.worker = WriteWorker(self.bin_data)
+        self.worker.log.connect(self._log)
+        self.worker.device_data_ready.connect(lambda d: self.dev_hex.setPlainText(format_hex(d)))
+        self.worker.finished.connect(lambda _: self._set_buttons(True))
+        self.worker.start()
+
+    def _set_buttons(self, enabled: bool):
+        self.choose_btn.setEnabled(enabled)
+        self.read_btn.setEnabled(enabled)
+        self.write_btn.setEnabled(enabled and bool(self.bin_data))
+
+    def _log(self, msg: str):
+        if msg.startswith("SUCCESS"):
+            color = "#4caf50"
+        elif msg.startswith(("ERROR", "FAILURE")):
+            color = "#e05555"
         else:
-            QMessageBox.critical(self, "EEPROM", "Process failed. See logs.")
-        self.start_button.setEnabled(True)
+            color = "#b0b0b0"
+        safe = (
+            msg.replace("&", "&amp;")
+               .replace("<", "&lt;")
+               .replace(">", "&gt;")
+               .replace("\n", "<br>")
+        )
+        self.log_box.append(f'<span style="color:{color};">{safe}</span>')
+        print(msg)
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
