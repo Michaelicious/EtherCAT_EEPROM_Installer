@@ -1,10 +1,12 @@
+import os
 import sys
 from time import sleep
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QTextEdit, QFileDialog, QLabel
 )
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import QThread, pyqtSignal, Qt
+from PyQt6.QtGui import QIcon, QPixmap
 
 from ec_install_eeprom import (
     read_eeprom_bin_file,
@@ -13,7 +15,16 @@ from ec_install_eeprom import (
     write_eeprom_data,
 )
 
-VERSION = "V1.2"
+VERSION = "v1.4"
+
+APP_ICON = "stxi_ethercat_logo.png"
+STXI_LOGO = "STXI_logo_2021.png"
+
+
+def resource_path(name: str) -> str:
+    """Resolve a bundled resource path for both source and PyInstaller runs."""
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, name)
 
 _NO_SLAVE_HINT = (
     "  • Verify the slave device is powered and connected.\n"
@@ -129,6 +140,7 @@ class EEPROMUI(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"STXi Motion EtherCAT EEPROM Tool  {VERSION}")
+        self.setWindowIcon(QIcon(resource_path(APP_ICON)))
         self.resize(1300, 780)
         self.bin_data = b""
         self._apply_styles()
@@ -208,6 +220,15 @@ class EEPROMUI(QWidget):
         btn_row.addWidget(self.read_btn)
         btn_row.addWidget(self.write_btn)
         btn_row.addStretch()
+
+        # ---- STXi logo (top-right, same row as the buttons) ----
+        logo_label = QLabel()
+        pixmap = QPixmap(resource_path(STXI_LOGO))
+        if not pixmap.isNull():
+            logo_label.setPixmap(
+                pixmap.scaledToHeight(40, Qt.TransformationMode.SmoothTransformation)
+            )
+        btn_row.addWidget(logo_label, alignment=Qt.AlignmentFlag.AlignRight)
         root.addLayout(btn_row)
 
         # ---- Loaded file indicator ----
@@ -322,6 +343,7 @@ class EEPROMUI(QWidget):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    app.setWindowIcon(QIcon(resource_path(APP_ICON)))
     window = EEPROMUI()
     window.show()
     sys.exit(app.exec())

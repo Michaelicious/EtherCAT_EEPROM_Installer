@@ -16,7 +16,9 @@ def read_eeprom_data(slave:CdefSlave, eeprom_size:int=1024)->bytearray:
     # stop = 0
     binr = bytearray()
     
-    for i in range(0, eeprom_size, 2):
+    # eeprom_read() returns 4 bytes per call and takes a *word* address, so to
+    # read `eeprom_size` bytes we step word addresses 0,2,4,… up to eeprom_size//2.
+    for i in range(0, eeprom_size // 2, 2):
         read = slave.eeprom_read(i)
         for b in read:
             binr.append(b)
@@ -83,7 +85,7 @@ def setup_ethercat()-> Master | Literal[False]:
 import os,sys
 
 BIN_FILE = 'ESCeepromdata.bin'
-VERSION = '1.3'
+VERSION = '1.4'
 
 if __name__ == "__main__":
     

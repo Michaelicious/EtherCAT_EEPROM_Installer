@@ -1,7 +1,7 @@
 UI for writting EtherCAT EEPROM .bin files.
 
 
-Verison:    V1.3
+Verison:    V1.4
 
 Author:     Michael.grinberg@stxim.com
 
@@ -12,6 +12,10 @@ Dependencies:
 
 
 Changelog:
+V1.4:
+Fixed post-write verification always failing (device EEPROM read returned double the requested byte count, so it never matched the BIN file)
+Added application icon and STXi logo to the UI
+
 V1.3:
 Updated UI
 Added option to read from drive
