@@ -15,7 +15,7 @@ from ec_install_eeprom import (
     write_eeprom_data,
 )
 
-VERSION = "v1.4"
+VERSION = "v1.5"
 
 APP_ICON = "stxi_ethercat_logo.png"
 STXI_LOGO = "STXI_logo_2021.png"
@@ -33,14 +33,38 @@ _NO_SLAVE_HINT = (
 )
 
 
-def format_hex(data) -> str:
+DIFF_COLOR = "#ffa726"   # orange used to mark BIN-vs-device byte differences
+
+
+def _esc(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def format_hex_html(data, diff: "set[int] | frozenset[int]" = frozenset()) -> str:
+    """Render `data` as an HTML hex dump; byte indices in `diff` are shown in orange."""
     lines = []
     for i in range(0, len(data), 16):
         chunk = data[i:i + 16]
-        hex_str = f"{'  '.join(f'{b:02X}' for b in chunk):<47}"
-        ascii_str = "".join(chr(b) if 32 <= b <= 126 else "." for b in chunk)
-        lines.append(f"{i:08X}  {hex_str}  {ascii_str}")
-    return "\n".join(lines)
+        hex_cells, asc_cells = [], []
+        for j in range(16):
+            gi = i + j
+            if j < len(chunk):
+                b = chunk[j]
+                hx = f"{b:02X}"
+                ch = _esc(chr(b) if 32 <= b <= 126 else ".")
+                if gi in diff:
+                    hx = f'<span style="color:{DIFF_COLOR};font-weight:bold">{hx}</span>'
+                    ch = f'<span style="color:{DIFF_COLOR};font-weight:bold">{ch}</span>'
+            else:
+                hx, ch = "  ", " "   # padding so the ASCII column stays aligned
+            hex_cells.append(hx)
+            asc_cells.append(ch)
+        lines.append(f"{i:08X}  {'  '.join(hex_cells)}  {''.join(asc_cells)}")
+    body = "\n".join(lines)
+    return (
+        '<pre style="margin:0;font-family:Consolas,monospace;'
+        f'font-size:11px;color:#c8c8c8">{body}</pre>'
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +167,7 @@ class EEPROMUI(QWidget):
         self.setWindowIcon(QIcon(resource_path(APP_ICON)))
         self.resize(1300, 780)
         self.bin_data = b""
+        self.dev_data = b""
         self._apply_styles()
         self._build_ui()
 
@@ -281,41 +306,68 @@ class EEPROMUI(QWidget):
     # ------------------------------------------------------------------
     def _load_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Select BIN File", "", "BIN Files (*.bin)")
-        self.bin_hex.clear()
         self.bin_data = b""
         self.write_btn.setEnabled(False)
         self.file_label.setText("No BIN file loaded.")
         if not path:
+            self._refresh_hex_views()
             return
         try:
             self.bin_data = read_eeprom_bin_file(path)
             if self.bin_data:
-                self.bin_hex.setPlainText(format_hex(self.bin_data))
                 name = path.replace("\\", "/").split("/")[-1]
                 self.file_label.setText(f"Loaded: {name}  ({len(self.bin_data)} bytes)   {path}")
                 self.write_btn.setEnabled(True)
             else:
+                self.bin_data = b""
                 self._log("ERROR: The selected file is empty.")
         except Exception as e:
+            self.bin_data = b""
             self._log(f"ERROR: Could not read file — {e}")
+        self._refresh_hex_views()
+
+    def _on_device_data(self, data):
+        self.dev_data = bytes(data)
+        self._refresh_hex_views()
+
+    def _refresh_hex_views(self):
+        """Render both hex panes; when both hold data, highlight differing bytes in orange."""
+        bin_data, dev_data = self.bin_data, self.dev_data
+        if bin_data and dev_data:
+            n = min(len(bin_data), len(dev_data))
+            common = {i for i in range(n) if bin_data[i] != dev_data[i]}
+            bin_diff = common | set(range(n, len(bin_data)))
+            dev_diff = common | set(range(n, len(dev_data)))
+            self.bin_hex.setHtml(format_hex_html(bin_data, bin_diff))
+            self.dev_hex.setHtml(format_hex_html(dev_data, dev_diff))
+            total = len(bin_diff | dev_diff)
+            if total:
+                self._log(f"Comparison: {total} differing byte(s) highlighted in orange.")
+            else:
+                self._log("Comparison: BIN file and device EEPROM are identical.")
+        else:
+            self.bin_hex.setHtml(format_hex_html(bin_data)) if bin_data else self.bin_hex.clear()
+            self.dev_hex.setHtml(format_hex_html(dev_data)) if dev_data else self.dev_hex.clear()
 
     def _start_read(self):
+        self.dev_data = b""
         self.dev_hex.clear()
         self.log_box.clear()
         self._set_buttons(False)
         self.worker = ReadWorker()
         self.worker.log.connect(self._log)
-        self.worker.data_ready.connect(lambda d: self.dev_hex.setPlainText(format_hex(d)))
+        self.worker.data_ready.connect(self._on_device_data)
         self.worker.finished.connect(lambda _: self._set_buttons(True))
         self.worker.start()
 
     def _start_write(self):
+        self.dev_data = b""
         self.dev_hex.clear()
         self.log_box.clear()
         self._set_buttons(False)
         self.worker = WriteWorker(self.bin_data)
         self.worker.log.connect(self._log)
-        self.worker.device_data_ready.connect(lambda d: self.dev_hex.setPlainText(format_hex(d)))
+        self.worker.device_data_ready.connect(self._on_device_data)
         self.worker.finished.connect(lambda _: self._set_buttons(True))
         self.worker.start()
 

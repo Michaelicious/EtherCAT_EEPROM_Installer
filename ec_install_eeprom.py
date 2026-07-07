@@ -85,7 +85,7 @@ def setup_ethercat()-> Master | Literal[False]:
 import os,sys
 
 BIN_FILE = 'ESCeepromdata.bin'
-VERSION = '1.4'
+VERSION = '1.5'
 
 if __name__ == "__main__":
     
