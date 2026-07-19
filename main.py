@@ -9,13 +9,14 @@ from PyQt6.QtCore import QThread, pyqtSignal, Qt
 from PyQt6.QtGui import QIcon, QPixmap
 
 from ec_install_eeprom import (
+    EEPROM_SIZE,
     read_eeprom_bin_file,
     read_eeprom_data,
     setup_ethercat,
     write_eeprom_data,
 )
 
-VERSION = "v1.5"
+VERSION = "v1.6"
 
 APP_ICON = "stxi_ethercat_logo.png"
 STXI_LOGO = "STXI_logo_2021.png"
@@ -86,7 +87,7 @@ class ReadWorker(QThread):
                 return
             slave = master.slaves[-1]
             self.log.emit(f"Connected — {len(master.slaves)} slave(s) detected. Reading EEPROM…")
-            data = read_eeprom_data(slave, eeprom_size=1024)
+            data = read_eeprom_data(slave, eeprom_size=EEPROM_SIZE)
             self.log.emit(f"SUCCESS: Device EEPROM read complete ({len(data)} bytes).")
             self.data_ready.emit(data)
             self.finished.emit(True)
@@ -116,11 +117,12 @@ class WriteWorker(QThread):
             slave = master.slaves[-1]
             self.log.emit(f"Connected — {len(master.slaves)} slave(s) detected.")
 
+            read_size = max(EEPROM_SIZE, len(self.bin_data))
             self.log.emit("Reading current device EEPROM for comparison…")
-            current = read_eeprom_data(slave, eeprom_size=len(self.bin_data))
+            current = read_eeprom_data(slave, eeprom_size=read_size)
             self.device_data_ready.emit(current)
 
-            if bytes(current) == self.bin_data:
+            if bytes(current[:len(self.bin_data)]) == self.bin_data:
                 self.log.emit("SUCCESS: Device EEPROM already matches the BIN file — no write needed.")
                 self.finished.emit(True)
                 return
@@ -139,10 +141,10 @@ class WriteWorker(QThread):
             self.log.emit("Write complete. Waiting for device to settle…")
             sleep(0.5)
             self.log.emit("Verifying written data…")
-            verified = read_eeprom_data(slave, eeprom_size=len(self.bin_data))
+            verified = read_eeprom_data(slave, eeprom_size=read_size)
             self.device_data_ready.emit(verified)
 
-            if bytes(verified) == self.bin_data:
+            if bytes(verified[:len(self.bin_data)]) == self.bin_data:
                 self.log.emit("SUCCESS: EEPROM written and verified successfully.")
                 self.finished.emit(True)
             else:

@@ -2,6 +2,10 @@ import pysoem, time
 from typing import Literal
 from pysoem.pysoem import CdefSlave, Master
 
+# Full ESC EEPROM size in bytes (24C32-class part = 4 KiB). Reads default to the
+# whole chip so 0xFF-padded regions are shown too, matching what writes cover.
+EEPROM_SIZE = 4096
+
 
 def read_eeprom_bin_file(path)->bytes:
     with open(path, 'rb') as file:
@@ -11,7 +15,7 @@ def read_eeprom_bin_file(path)->bytes:
         return data
     return b''
 
-def read_eeprom_data(slave:CdefSlave, eeprom_size:int=1024)->bytearray:
+def read_eeprom_data(slave:CdefSlave, eeprom_size:int=EEPROM_SIZE)->bytearray:
     # eeprom_data = []
     # stop = 0
     binr = bytearray()
@@ -46,8 +50,8 @@ def write_eeprom_data(slave:CdefSlave, bin_file:bytes):
     return False
 
 def verify_eeprom_data(slave:CdefSlave,eeprom_bin_file):
-    # --- 
-    eeprom_data_read = read_eeprom_data(slave)
+    # ---
+    eeprom_data_read = read_eeprom_data(slave, eeprom_size=len(eeprom_bin_file))
     return eeprom_data_read == eeprom_bin_file
 
 def setup_ethercat()-> Master | Literal[False]:
@@ -85,7 +89,7 @@ def setup_ethercat()-> Master | Literal[False]:
 import os,sys
 
 BIN_FILE = 'ESCeepromdata.bin'
-VERSION = '1.5'
+VERSION = '1.6'
 
 if __name__ == "__main__":
     
@@ -114,13 +118,13 @@ if __name__ == "__main__":
         if master:
             slave = master.slaves[0]
             print(f'Comparing EEPROM data with {BIN_FILE}')
-            if not isinstance(eeprom_bin_file,bytearray):
+            if not isinstance(eeprom_bin_file,bytes) or not eeprom_bin_file:
                 print(f'Error reading EEPROM binary file {bin_file_path}. Exiting ...')
                 sys.exit(1)
-            elif not verify_eeprom_data(eeprom_bin_file,slave):
+            elif not verify_eeprom_data(slave,eeprom_bin_file):
                 print('Writing EEPROM data')
-                write_eeprom_data(eeprom_bin_file,slave)
-                res = verify_eeprom_data(eeprom_bin_file,slave)
+                write_eeprom_data(slave,eeprom_bin_file)
+                res = verify_eeprom_data(slave,eeprom_bin_file)
                 print(f'EEPROM data written. Verify: {res}')
             else: 
                 print(f'EEPROM data is up to date with {BIN_FILE}')
